@@ -39,7 +39,7 @@ Dockerfile/app/s6-overlay/tmp/
 
 .env
 
-**/scan_report/
+
 .history/
 **/tmp
-scan_report/**
+scan_report/
