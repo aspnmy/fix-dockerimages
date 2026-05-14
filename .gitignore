@@ -43,3 +43,8 @@ Dockerfile/app/s6-overlay/tmp/
 .history/
 **/tmp
 scan_report/
+config
+
+# Local configuration files
+gitconfig
+.user_repo

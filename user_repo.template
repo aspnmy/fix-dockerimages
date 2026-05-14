@@ -1,0 +1,6 @@
+#   项目根目录下的 `.user_repo` 文件用于指定修补后镜像的目标仓库地址，例如：
+#
+#   ```text
+#   aspnmy/debian-base
+#   ```
+#   然后用户名改成.user_repo
