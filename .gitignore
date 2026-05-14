@@ -42,3 +42,4 @@ Dockerfile/app/s6-overlay/tmp/
 **/scan_report/
 .history/
 **/tmp
+scan_report/**
