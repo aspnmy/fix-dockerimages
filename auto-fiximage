@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # ==========================
 # 统一绝对路径
 # ==========================
@@ -27,7 +29,6 @@ fi
 # ✅ 强制加载 ~/.bashrc 密钥
 # ==========================
 echo "🔍 检查并加载 ~/.bashrc 中的密钥..."
-# 临时关闭 nounset 防止读取空变量报错
 set +o nounset
 source ~/.bashrc
 set -o nounset
@@ -65,15 +66,36 @@ check_and_read_credits() {
 check_and_read_credits
 
 # ==========================
-# 镜像配置
+# ✅ 关键修改：IMAGE_NAME 必须传参，无默认值
 # ==========================
-if [ $# -ge 1 ]; then
-    IMAGE_NAME="$1"
-else
-    IMAGE_NAME="rdamssh/dhi-debian-base:bookworm-debian12-dev"
+if [ $# -lt 1 ]; then
+    echo -e "\n❌ 错误：请传入需要修复的镜像名称！"
+    echo -e "✅ 使用示例："
+    echo -e "   ./auto-fiximage 镜像名称:标签"
+    echo -e "   ./auto-fiximage rdamssh/dhi-debian-base:bookworm-debian12-dev\n"
+    exit 1
+fi
+IMAGE_NAME="$1"
+
+# ==========================
+# ✅ 关键修改：从 .user_repo 读取用户仓库地址
+# ==========================
+user_repo_file="${root_dir}/.user_repo"
+if [ ! -f "${user_repo_file}" ]; then
+    echo -e "\n❌ 错误：用户仓库配置文件不存在！"
+    echo -e "📁 请创建文件： ${user_repo_file}"
+    echo -e "✏️ 内容示例：aspnmy/debian-base\n"
+    exit 1
+fi
+USER_REPO_NAME=$(cat "${user_repo_file}" | tr -d '\n' | tr -d ' ')
+if [ -z "${USER_REPO_NAME}" ]; then
+    echo -e "\n❌ 错误：.user_repo 文件内容为空，请填写用户仓库地址！\n"
+    exit 1
 fi
 
-USER_REPO_NAME="aspnmy/debian-base" # 用户的存档空间
+# ==========================
+# 镜像配置
+# ==========================
 IMAGE_TAG="${IMAGE_NAME#*:}" # 原始镜像的标签后缀
 
 DH="docker.io"
@@ -114,8 +136,7 @@ RUN apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 EOF
     docker build -f "${root_dir}/fix-baseimages.Dockerfile" -t "${FIXED_IMAGE}" "${root_dir}"
-    # 构建完成删除
-    rm -rf ${root_dir}/fix-baseimages.Dockerfile
+    rm -rf "${root_dir}/fix-baseimages.Dockerfile"
 }
 
 tag_all() {
@@ -123,30 +144,22 @@ tag_all() {
 
     docker tag "${FIXED_IMAGE}" "${DH}/${FIXED_IMAGE}-lts"
     docker tag "${FIXED_IMAGE}" "${GHCR}/${FIXED_IMAGE}-lts"
-    #docker tag "${FIXED_IMAGE}" "${DHI}/${FIXED_IMAGE}"
 
-        echo -e "\n===新增标签 ${DH}/${FIXED_IMAGE}-lts"
-        echo -e "\n===新增标签 ${GHCR}/${FIXED_IMAGE}-lts"
+    echo -e "\n===新增标签 ${DH}/${FIXED_IMAGE}-lts"
+    echo -e "\n===新增标签 ${GHCR}/${FIXED_IMAGE}-lts"
 }
 
 # ==========================
-# ✅ 新增：推送所有标签
+# ✅ 推送所有标签
 # ==========================
 pushAll() {
     echo -e "\n🚀 开始推送所有镜像标签..."
 
-    # 推送 Docker Hub
     echo -e "\n📤 推送至 ${DH}/${FIXED_IMAGE}-lts"
     docker push "${DH}/${FIXED_IMAGE}-lts"
 
-
-    # 推送 GHCR
     echo -e "\n📤 推送至 ${GHCR}/${FIXED_IMAGE}-lts"
     docker push "${GHCR}/${FIXED_IMAGE}-lts"
-
-    # # 推送 DHI - DHI无需推送-因为无付费
-    # echo -e "\n📤 推送至 ${DHI}/${FIXED_IMAGE}"
-    # docker push "${DHI}/${FIXED_IMAGE}"
 
     echo -e "\n✅ 所有标签推送完成！"
 }
@@ -171,7 +184,6 @@ scan_fixed() {
 # ==========================
 final_save() {
     set +euo pipefail
-    #echo "✅ 检查保存脚本：${save_script}"
     if [ -f "${save_script}" ]; then
         echo -e "\n🚀 执行密钥写入..."
         bash "${save_script}"
@@ -183,7 +195,7 @@ final_save() {
 }
 
 # ==========================
-# 主入口（已加入 pushAll）
+# 主入口
 # ==========================
 main() {
     login_all_registry
@@ -191,7 +203,7 @@ main() {
     build_fixed_image
     tag_all
     scan_fixed
-    pushAll          # 自动推送所有标签
+    pushAll
     final_save
     echo -e "\n🎉 全流程完成！"
 }
