@@ -1,0 +1,75 @@
+#!/bin/bash
+set -euo pipefail
+
+# ==============================
+# 用法：
+# ./image2zstd.sh 镜像名:标签
+# ==============================
+
+# ==========================
+# ✅ 关键修改：IMAGE_NAME 必须传参，无默认值
+# ==========================
+if [ $# -lt 1 ]; then
+    echo -e "\n❌ 错误：请传入需要压缩的镜像名称！"
+    echo -e "✅ 使用示例："
+    echo -e "   ./image2zstd 镜像名称:标签"
+    echo -e "   ./image2zstd rdamssh/dhi-debian-base:bookworm-debian12-dev\n"
+    exit 1
+fi
+IMAGE_NAME="$1"
+
+
+# 绝对路径
+tool_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+tmp_dir="${tool_dir}/tmp"
+SOURCE_IMAGE="$1"
+ZSTD_IMAGE="${SOURCE_IMAGE}-zstd-lts"
+
+# 自动生成安全临时文件（自动删除，无冲突）
+TMP_FILE="$(mktemp -p "$tmp_dir").tar.zst"
+
+
+pull_original() {
+    echo -e "\n=== 拉取原始镜像 ==="
+    docker pull "${IMAGE_NAME}"
+}
+
+image2zstd() {
+    # 检查依赖
+if ! command -v zstd &> /dev/null; then
+    echo "安装 zstd..."
+    apt update && apt install -y zstd -y
+fi
+
+echo -e "\n========================================"
+echo "🔹 本地压缩镜像为 zstd"
+echo "🔹 源镜像：$SOURCE_IMAGE"
+echo "🔹 输出镜像：$ZSTD_IMAGE"
+echo -e "========================================"
+
+# 导出 + 强制覆盖压缩（✅ 修复：-f 强制覆盖）
+echo "🚀 导出并压缩中..."
+docker save "$SOURCE_IMAGE" | zstd -T0 -15 -f -o "$TMP_FILE"
+
+# 加载回 Docker
+echo "✅ 导入压缩镜像..."
+docker load -i "$TMP_FILE"
+
+# 打 zstd 标签
+docker tag "$SOURCE_IMAGE" "$ZSTD_IMAGE"
+
+# 清理
+rm -rf "$tmp_dir"/*
+
+echo -e "\n🎉 成功！"
+echo "👉 本地 zstd 镜像：$ZSTD_IMAGE"
+echo "👉 可直接推送、运行、完全兼容"
+}
+
+
+main(){
+    pull_original
+    image2zstd
+}
+
+main

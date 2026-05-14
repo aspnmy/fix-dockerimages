@@ -7,6 +7,8 @@ set -euo pipefail
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 tool_dir="${root_dir}/bin"
 save_script="${tool_dir}/tmp/save-creds.sh"
+tmp_dir="${tool_dir}/tmp"
+mkdir -p "$tmp_dir"
 
 # ==========================
 # 🚪 离开模式
@@ -22,6 +24,23 @@ fi
 # ==========================
 if [ "${1:-}" == "cls" ]; then
     bash "${tool_dir}/secure-env" cls
+    exit 0
+fi
+
+# ==========================
+# 🚪 命令开关：zstd 独立压缩模式
+# ==========================
+if [ "${1:-}" == "zstd" ]; then
+    if [ $# -ne 2 ]; then
+        echo -e "\n❌ 错误：用法 →  $0 zstd 镜像名称:标签"
+        echo -e "示例：$0 zstd aspnmy/debian_ssh.s6-overlay:baseimage-s6-overlay_v3.2.3.0_2026051500-lts\n"
+        exit 1
+    fi
+
+    IMAGE_TO_COMPRESS="$2"
+    echo -e "\n🚀 启动独立 zstd 压缩模式"
+    echo -e "🔸 待压缩镜像：${IMAGE_TO_COMPRESS}\n"
+    bash "${tool_dir}/image2zstd" "${IMAGE_TO_COMPRESS}"
     exit 0
 fi
 
@@ -66,7 +85,7 @@ check_and_read_credits() {
 check_and_read_credits
 
 # ==========================
-# ✅ 关键修改：IMAGE_NAME 必须传参，无默认值
+# ✅ 主流程：必须传入镜像名
 # ==========================
 if [ $# -lt 1 ]; then
     echo -e "\n❌ 错误：请传入需要修复的镜像名称！"
@@ -78,32 +97,28 @@ fi
 IMAGE_NAME="$1"
 
 # ==========================
-# ✅ 关键修改：从 .user_repo 读取用户仓库地址
+# ✅ 从 .user_repo 读取用户仓库地址
 # ==========================
 user_repo_file="${root_dir}/.user_repo"
 if [ ! -f "${user_repo_file}" ]; then
     echo -e "\n❌ 错误：用户仓库配置文件不存在！"
-    echo -e "📁 请创建文件： ${user_repo_file}"
-    echo -e "✏️ 内容示例：aspnmy/debian-base\n"
     exit 1
 fi
 USER_REPO_NAME=$(cat "${user_repo_file}" | tr -d '\n' | tr -d ' ')
 if [ -z "${USER_REPO_NAME}" ]; then
-    echo -e "\n❌ 错误：.user_repo 文件内容为空，请填写用户仓库地址！\n"
+    echo -e "\n❌ 错误：.user_repo 文件内容为空！"
     exit 1
 fi
 
 # ==========================
 # 镜像配置
 # ==========================
-IMAGE_TAG="${IMAGE_NAME#*:}" # 原始镜像的标签后缀
-
+IMAGE_TAG="${IMAGE_NAME#*:}"
 DH="docker.io"
 GHCR="ghcr.io"
 DHI="dhi.io"
-
 FIXED_TAG="${IMAGE_TAG}-fixed"
-FIXED_IMAGE="${USER_REPO_NAME}:${FIXED_TAG}" # 新文件tag名-未评网站前缀
+FIXED_IMAGE="${USER_REPO_NAME}:${FIXED_TAG}"
 
 # ==========================
 # 登录
@@ -141,26 +156,14 @@ EOF
 
 tag_all() {
     echo -e "\n=== 打标签 ==="
-
     docker tag "${FIXED_IMAGE}" "${DH}/${FIXED_IMAGE}-lts"
     docker tag "${FIXED_IMAGE}" "${GHCR}/${FIXED_IMAGE}-lts"
-
-    echo -e "\n===新增标签 ${DH}/${FIXED_IMAGE}-lts"
-    echo -e "\n===新增标签 ${GHCR}/${FIXED_IMAGE}-lts"
 }
 
-# ==========================
-# ✅ 推送所有标签
-# ==========================
 pushAll() {
     echo -e "\n🚀 开始推送所有镜像标签..."
-
-    echo -e "\n📤 推送至 ${DH}/${FIXED_IMAGE}-lts"
     docker push "${DH}/${FIXED_IMAGE}-lts"
-
-    echo -e "\n📤 推送至 ${GHCR}/${FIXED_IMAGE}-lts"
     docker push "${GHCR}/${FIXED_IMAGE}-lts"
-
     echo -e "\n✅ 所有标签推送完成！"
 }
 
@@ -170,27 +173,13 @@ scan_fixed() {
     scan_time=$(date +%Y%m%d%H%M%S)
     REPORT_FILE="${root_dir}/scan_report/scan-${scan_time}-${FIXED_TAG}.report"
 
-    trivy image \
-        --scanners vuln \
-        --skip-db-update \
-        --offline-scan \
-        "${FIXED_IMAGE}" > "${REPORT_FILE}"
-
+    trivy image --scanners vuln --skip-db-update --offline-scan "${FIXED_IMAGE}" > "${REPORT_FILE}"
     echo "✅ 扫描完成：${REPORT_FILE}"
 }
 
-# ==========================
-# 执行保存脚本
-# ==========================
 final_save() {
     set +euo pipefail
-    if [ -f "${save_script}" ]; then
-        echo -e "\n🚀 执行密钥写入..."
-        bash "${save_script}"
-        rm -f "${save_script}"
-    else
-        echo -e "\n✅ 无需保存"
-    fi
+    [ -f "${save_script}" ] && bash "${save_script}" && rm -f "${save_script}"
     set -euo pipefail
 }
 
