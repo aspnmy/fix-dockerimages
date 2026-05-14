@@ -1,0 +1,115 @@
+#!/bin/bash
+set +euo pipefail
+
+# 绝对路径
+tool_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+mkdir -p "${tool_dir}/tmp"
+env_file="${tool_dir}/.env"
+lock_file="${tool_dir}/.lock"
+save_script="${tool_dir}/tmp/save-creds.sh"
+report_dir="${tool_dir%/*}/scan_report"
+
+
+load_env_securely() {
+    # 锁定检查
+    if [ -f "${lock_file}" ]; then
+        echo -e "\n=================================================="
+        echo -e "🔴 【离开模式已激活】"
+        echo -e "    请配置 ${env_file} 恢复使用"
+        echo -e "==================================================\n"
+
+        if [ ! -f "${env_file}" ]; then
+            return 0
+        fi
+
+        rm -f "${lock_file}"
+        echo -e "✅ 已解除锁定\n"
+    fi
+
+    # 有 .env 就加载
+    if [ -f "${env_file}" ]; then
+        echo "✅ 自动加载密钥 ${env_file}"
+        set -o allexport
+        source "${env_file}"
+        set +o allexport
+        rm -f "${env_file}"
+
+        # ======================
+        # ✅ 正确生成写入脚本
+        # ======================
+        cat > "${save_script}" <<'EOF'
+#!/bin/bash
+set +euo pipefail
+cp ~/.bashrc ~/.bashrc.backup.$(date +%Y%m%d%H%M%S)
+
+sed -i '/# AUTO_SAVE/d' ~/.bashrc
+sed -i '/export DOCKERHUB_/d' ~/.bashrc
+sed -i '/export GHCR_/d' ~/.bashrc
+sed -i '/export DHI_/d' ~/.bashrc
+
+echo "" >> ~/.bashrc
+echo "# AUTO_SAVE" >> ~/.bashrc
+EOF
+
+        # 👇 下面这几行是修复关键！必须加 echo
+        echo "echo \"export DOCKERHUB_USER='${DOCKERHUB_USER}'\" >> ~/.bashrc" >> "${save_script}"
+        echo "echo \"export DOCKERHUB_PASS='${DOCKERHUB_PASS}'\" >> ~/.bashrc" >> "${save_script}"
+        echo "echo \"export GHCR_USER='${GHCR_USER}'\" >> ~/.bashrc" >> "${save_script}"
+        echo "echo \"export GHCR_PASS='${GHCR_PASS}'\" >> ~/.bashrc" >> "${save_script}"
+        echo "echo \"export DHI_USER='${DHI_USER}'\" >> ~/.bashrc" >> "${save_script}"
+        echo "echo \"export DHI_PASS='${DHI_PASS}'\" >> ~/.bashrc" >> "${save_script}"
+
+        echo "echo \"✅ 密钥已成功写入 ~/.bashrc\"" >> "${save_script}"
+
+        return 0
+    fi
+
+    # 变量已存在
+    if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASS:-}" ] &&
+       [ -n "${GHCR_USER:-}" ] && [ -n "${GHCR_PASS:-}" ] &&
+       [ -n "${DHI_USER:-}" ] && [ -n "${DHI_PASS:-}" ]; then
+        echo -e "\n============================================================"
+        echo -e "✅ 密钥已加载，直接使用"
+        echo -e "============================================================\n"
+        return 0
+    fi
+}
+
+# 离开模式
+leave_mode() {
+    echo -e "\n🚪 离开模式 → 清空所有密钥"
+
+    unset DOCKERHUB_USER DOCKERHUB_PASS
+    unset GHCR_USER GHCR_PASS
+    unset DHI_USER DHI_PASS
+
+    sed -i '/# AUTO_SAVE/d' ~/.bashrc
+    sed -i '/export DOCKERHUB_/d' ~/.bashrc
+    sed -i '/export GHCR_/d' ~/.bashrc
+    sed -i '/export DHI_/d' ~/.bashrc
+
+    touch "${lock_file}"
+
+    echo -e "\n=================================================="
+    echo -e "🟥 已锁定 | 请配置 ${env_file} 恢复"
+    echo -e "==================================================\n"
+
+    pkill -9 bash 2>/dev/null
+    exit 0
+}
+
+cleanReport_mode(){
+    echo "🚪 开始清理Scan报告..."
+    
+    rm -rf "${report_dir}"/* 
+}
+
+# 执行
+if [ "${1:-}" == "leave" ]; then
+    leave_mode
+elif [ "${1:-}" == "cls" ]; then
+    cleanReport_mode
+else
+    load_env_securely
+fi
+

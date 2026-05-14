@@ -1,0 +1,199 @@
+#!/bin/bash
+# ==========================
+# 统一绝对路径
+# ==========================
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+tool_dir="${root_dir}/bin"
+save_script="${tool_dir}/tmp/save-creds.sh"
+
+# ==========================
+# 🚪 离开模式
+# ==========================
+if [ "${1:-}" == "leave" ]; then
+    echo -e "🚪 安全离开模式启动..."
+    bash "${tool_dir}/secure-env" leave
+    exit 0
+fi
+
+# ==========================
+# 🚪 清理报告
+# ==========================
+if [ "${1:-}" == "cls" ]; then
+    bash "${tool_dir}/secure-env" cls
+    exit 0
+fi
+
+# ==========================
+# ✅ 强制加载 ~/.bashrc 密钥
+# ==========================
+echo "🔍 检查并加载 ~/.bashrc 中的密钥..."
+# 临时关闭 nounset 防止读取空变量报错
+set +o nounset
+source ~/.bashrc
+set -o nounset
+
+# ==========================
+# 加载环境变量
+# ==========================
+source "${tool_dir}/secure-env"
+
+# ==========================
+# 凭证检查
+# ==========================
+check_and_read_credits() {
+    if [ -z "${DOCKERHUB_USER:-}" ] || [ -z "${DOCKERHUB_PASS:-}" ]; then
+        echo -e "\n⚠️ Docker Hub 凭证为空，请手动输入："
+        read -p "用户名：" DOCKERHUB_USER
+        read -s -p "密码：" DOCKERHUB_PASS
+        echo
+    fi
+
+    if [ -z "${GHCR_USER:-}" ] || [ -z "${GHCR_PASS:-}" ]; then
+        echo -e "\n⚠️ GHCR.IO 凭证为空，请手动输入："
+        read -p "用户名：" GHCR_USER
+        read -s -p "密码/Token：" GHCR_PASS
+        echo
+    fi
+
+    if [ -z "${DHI_USER:-}" ] || [ -z "${DHI_PASS:-}" ]; then
+        echo -e "\n⚠️ DHI.IO 凭证为空，请手动输入："
+        read -p "用户名：" DHI_USER
+        read -s -p "密码：" DHI_PASS
+        echo
+    fi
+}
+check_and_read_credits
+
+# ==========================
+# 镜像配置
+# ==========================
+if [ $# -ge 1 ]; then
+    IMAGE_NAME="$1"
+else
+    IMAGE_NAME="rdamssh/dhi-debian-base:bookworm-debian12-dev"
+fi
+
+USER_REPO_NAME="aspnmy/debian-base" # 用户的存档空间
+IMAGE_TAG="${IMAGE_NAME#*:}" # 原始镜像的标签后缀
+
+DH="docker.io"
+GHCR="ghcr.io"
+DHI="dhi.io"
+
+FIXED_TAG="${IMAGE_TAG}-fixed"
+FIXED_IMAGE="${USER_REPO_NAME}:${FIXED_TAG}" # 新文件tag名-未评网站前缀
+
+# ==========================
+# 登录
+# ==========================
+login_all_registry() {
+    echo -e "\n=== 登录 Docker Hub ==="
+    echo "${DOCKERHUB_PASS}" | docker login "${DH}" -u "${DOCKERHUB_USER}" --password-stdin
+
+    echo -e "\n=== 登录 GHCR.IO ==="
+    echo "${GHCR_PASS}" | docker login "${GHCR}" -u "${GHCR_USER}" --password-stdin
+
+    echo -e "\n=== 登录 DHI.IO ==="
+    echo "${DHI_PASS}" | docker login "${DHI}" -u "${DHI_USER}" --password-stdin
+    echo -e "✅ 所有仓库登录完成！"
+}
+
+pull_original() {
+    echo -e "\n=== 拉取原始镜像 ==="
+    docker pull "${IMAGE_NAME}"
+}
+
+build_fixed_image() {
+    echo -e "\n=== 构建修复镜像 ==="
+    cat <<EOF > "${root_dir}/fix-baseimages.Dockerfile"
+FROM ${IMAGE_NAME}
+RUN apt-get clean \
+    && apt-get update -y \
+    && apt-get upgrade -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+EOF
+    docker build -f "${root_dir}/fix-baseimages.Dockerfile" -t "${FIXED_IMAGE}" "${root_dir}"
+    # 构建完成删除
+    rm -rf ${root_dir}/fix-baseimages.Dockerfile
+}
+
+tag_all() {
+    echo -e "\n=== 打标签 ==="
+
+    docker tag "${FIXED_IMAGE}" "${DH}/${FIXED_IMAGE}-lts"
+    docker tag "${FIXED_IMAGE}" "${GHCR}/${FIXED_IMAGE}-lts"
+    #docker tag "${FIXED_IMAGE}" "${DHI}/${FIXED_IMAGE}"
+
+        echo -e "\n===新增标签 ${DH}/${FIXED_IMAGE}-lts"
+        echo -e "\n===新增标签 ${GHCR}/${FIXED_IMAGE}-lts"
+}
+
+# ==========================
+# ✅ 新增：推送所有标签
+# ==========================
+pushAll() {
+    echo -e "\n🚀 开始推送所有镜像标签..."
+
+    # 推送 Docker Hub
+    echo -e "\n📤 推送至 ${DH}/${FIXED_IMAGE}-lts"
+    docker push "${DH}/${FIXED_IMAGE}-lts"
+
+
+    # 推送 GHCR
+    echo -e "\n📤 推送至 ${GHCR}/${FIXED_IMAGE}-lts"
+    docker push "${GHCR}/${FIXED_IMAGE}-lts"
+
+    # # 推送 DHI - DHI无需推送-因为无付费
+    # echo -e "\n📤 推送至 ${DHI}/${FIXED_IMAGE}"
+    # docker push "${DHI}/${FIXED_IMAGE}"
+
+    echo -e "\n✅ 所有标签推送完成！"
+}
+
+scan_fixed() {
+    echo -e "\n=== 漏洞扫描 ==="
+    mkdir -p "${root_dir}/scan_report"
+    scan_time=$(date +%Y%m%d%H%M%S)
+    REPORT_FILE="${root_dir}/scan_report/scan-${scan_time}-${FIXED_TAG}.report"
+
+    trivy image \
+        --scanners vuln \
+        --skip-db-update \
+        --offline-scan \
+        "${FIXED_IMAGE}" > "${REPORT_FILE}"
+
+    echo "✅ 扫描完成：${REPORT_FILE}"
+}
+
+# ==========================
+# 执行保存脚本
+# ==========================
+final_save() {
+    set +euo pipefail
+    #echo "✅ 检查保存脚本：${save_script}"
+    if [ -f "${save_script}" ]; then
+        echo -e "\n🚀 执行密钥写入..."
+        bash "${save_script}"
+        rm -f "${save_script}"
+    else
+        echo -e "\n✅ 无需保存"
+    fi
+    set -euo pipefail
+}
+
+# ==========================
+# 主入口（已加入 pushAll）
+# ==========================
+main() {
+    login_all_registry
+    pull_original
+    build_fixed_image
+    tag_all
+    scan_fixed
+    pushAll          # 自动推送所有标签
+    final_save
+    echo -e "\n🎉 全流程完成！"
+}
+
+main
